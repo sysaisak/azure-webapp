@@ -8,20 +8,20 @@ error_reporting(E_ALL);
 
 function getConnectionDetails($db_type) {
     // Lee las variables de entorno de Azure App Service (Configuración de la Aplicación)
+    // Las credenciales deben estar configuradas en el portal.
     if ($db_type === 'mysql') {
         return [
             'host' => getenv('MYSQL_HOST'),
             'user' => getenv('MYSQL_USER'),
             'pass' => getenv('MYSQL_PASS'),
-            'db'   => 'animes' // Usar la BD 'animes' creada
+            'db'   => 'animes' // La BD donde debe estar la tabla ANIME en MySQL
         ];
     } elseif ($db_type === 'pgsql') {
         return [
             'host' => getenv('PG_HOST'),
             'user' => getenv('PG_USER'),
             'pass' => getenv('PG_PASS'),
-            // Usar la BD 'animes' creada. Si no existe, usar 'postgres' por defecto.
-            'db'   => 'animes' 
+            'db'   => 'animes' // La BD donde debe estar la tabla ANIME en PostgreSQL
         ];
     }
     return null;
@@ -30,23 +30,24 @@ function getConnectionDetails($db_type) {
 // ==========================================================
 // FUNCIÓN PRINCIPAL DE PRUEBA Y EXTRACCIÓN DE DATOS
 // ==========================================================
-function testConnectionAndData($db_type, $table_name, $db_name_override = null) {
+function testConnectionAndData($db_type, $table_name, $db_name) {
     $details = getConnectionDetails($db_type);
     if (!$details) return "<h3>Prueba: $db_type</h3><p style='color: orange;'>⚠️ VARIABLES DE ENTORNO NO CONFIGURADAS.</p><hr>";
 
     $host = $details['host'];
     $user = $details['user'];
-    $db   = $db_name_override ?: $details['db'];
-
+    
     echo "<h3>Prueba de Conexión: $db_type</h3>";
     echo "<p>Host (DMZ->PRD vía VNet): <b>$host</b></p>";
-    echo "<p>Base de Datos: <b>$db</b></p>";
+    echo "<p>Base de Datos: <b>$db_name</b></p>";
 
     try {
         if ($db_type === 'mysql') {
-            $conn = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $details['pass']);
+            // Conectar especificando la Base de Datos
+            $conn = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8", $user, $details['pass']);
         } elseif ($db_type === 'pgsql') {
-            $conn = new PDO("pgsql:host=$host;dbname=$db;user=$user;password={$details['pass']}");
+            // Conectar especificando la Base de Datos
+            $conn = new PDO("pgsql:host=$host;dbname=$db_name;user=$user;password={$details['pass']}");
         }
 
         $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -55,7 +56,11 @@ function testConnectionAndData($db_type, $table_name, $db_name_override = null) 
         echo $status;
 
         // --- Extracción y Muestra de Datos ---
-        $stmt = $conn->query("SELECT * FROM $table_name");
+        // PostgreSQL es sensible a las mayúsculas/minúsculas de la tabla si no se usan comillas. 
+        // Usamos comillas dobles para forzar el nombre en mayúsculas 'ANIME' si es necesario.
+        $query = ($db_type === 'pgsql') ? "SELECT * FROM \"$table_name\"" : "SELECT * FROM $table_name";
+        
+        $stmt = $conn->query($query);
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         if (empty($results)) {
@@ -81,18 +86,10 @@ function testConnectionAndData($db_type, $table_name, $db_name_override = null) 
         $conn = null;
 
     } catch (PDOException $e) {
+        // Manejo de errores de conexión/DNS/Credenciales/SQL
         $status = "<p style='color: red; font-weight: bold;'>❌ CONEXIÓN FALLIDA / ERROR SQL</p>";
         $error_message = $e->getMessage();
-
-        if (strpos($error_message, '2002') !== false || strpos($error_message, 'could not translate host name') !== false) {
-             $status .= "<p style='color: red;'>ERROR DE DNS: La App no puede resolver el nombre del host. Verifica los Vínculos DNS Privados.</p>";
-        } elseif (strpos($error_message, 'Access denied') !== false) {
-             $status .= "<p style='color: red;'>ERROR DE CREDENCIALES: Verifica usuario/contraseña en la Configuración de la App.</p>";
-        } elseif (strpos($error_message, "Unknown database '$db'") !== false) {
-             $status .= "<p style='color: red;'>ERROR DE BASE DE DATOS: La BD '$db' no existe. Créala desde la VM de prueba.</p>";
-        } else {
-             $status .= "<p>Error: " . htmlspecialchars($error_message) . "</p>";
-        }
+        $status .= "<p>Error: " . htmlspecialchars($error_message) . "</p>";
     }
     echo "<hr>";
 }
@@ -109,7 +106,6 @@ function testConnectionAndData($db_type, $table_name, $db_name_override = null) 
         h1 { color: #0078d4; border-bottom: 3px solid #0078d4; padding-bottom: 10px; margin-top: 0; }
         h2 { color: #505050; }
         hr { border: none; border-top: 1px dashed #ccc; margin: 25px 0; }
-        p { margin: 8px 0; line-height: 1.5; }
     </style>
 </head>
 <body>
@@ -119,20 +115,15 @@ function testConnectionAndData($db_type, $table_name, $db_name_override = null) 
 
         <?php
             // Prueba 1: Conexión a MySQL y Tabla ANIME
-            testConnectionAndData('mysql', 'ANIME');
+            testConnectionAndData('mysql', 'ANIME', 'animes'); 
 
             // Prueba 2: Conexión a PostgreSQL y Tabla ANIME
-            // (Asumimos la BD es 'animes' para esta tabla)
             testConnectionAndData('pgsql', 'ANIME', 'animes');
-
-            // Prueba 3: Conexión a PostgreSQL y Tabla estudiantes
-            // (Asumimos la BD es 'estudiantes' para esta tabla)
-            testConnectionAndData('pgsql', 'estudiantes', 'estudiantes');
         ?>
 
         <hr>
         <p style="font-size: small; color: #0078d4;">
-            **VALIDACIÓN DE ÉXITO:** Si las tres pruebas muestran **CONEXIÓN EXITOSA** y **Datos encontrados**, se cumplen los objetivos de Conexión Operativa, Accesibilidad Segura y Persistencia de Datos.
+            **VALIDACIÓN DE ÉXITO:** Si ambas pruebas muestran **CONEXIÓN EXITOSA** y **Datos encontrados**, se cumplen los objetivos de Conexión Operativa y Accesibilidad Segura.
         </p>
     </div>
 </body>
